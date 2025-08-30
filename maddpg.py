@@ -1,17 +1,21 @@
 from ddpg_agent import DDPGAgent
 from ReplayBuffer import ReplayBuffer
-import random
 import torch
-
+import torch.nn as nn
+import torch.nn.functional as F
+import torch
+import numpy as np
 class MADDPG():
     def __init__(self, num_agents, maddpg_params, ddpg_agent_params):
         self.num_agents = num_agents
-        self.agents = [DDPGAgent(ddpg_agent_params) for _ in range(num_agents)]
-
+        self.agents = [DDPGAgent({**ddpg_agent_params, "random_seed": ddpg_agent_params["random_seed"] + i},
+                         num_agents)
+               for i in range(num_agents)]
         self.learn_every = maddpg_params['learn_every']
         self.num_training = maddpg_params['num_training']
         self.batch_size = maddpg_params['batch_size']
         self.buffer_size = int(maddpg_params['buffer_size'])
+        self.tau = ddpg_agent_params['tau']
 
         self.seed = maddpg_params['random_seed']
 
@@ -20,6 +24,7 @@ class MADDPG():
                                     random_seed=self.seed)
 
         self.t_step = 0      # Initialize time step (for updating every UPDATE_EVERY steps)
+        self.current_sigma = ddpg_agent_params['sigma']
 
     def reset(self):
         for agent in self.agents:
@@ -43,8 +48,81 @@ class MADDPG():
             for i in range(0, self.num_training):
                 if len(self.memory) > self.batch_size:
                     experiences = self.memory.sample()
-                    for i in range(0, self.num_agents):
-                        self.agents[i].learn(experiences)
+                    self.learn(experiences)
+                    
+    def learn(self, experiences):
+
+        states, actions_buf, rewards, next_states, dones = experiences
+
+        # Set target 
+        state_size = self.agents[0].state_size
+        action_size = self.agents[0].action_size
+
+        with torch.no_grad():
+            next_actions_list = []
+            for i in range(0, self.num_agents):
+                # Slice state for agent i
+                agent_next_states = next_states[:, i*state_size:(i+1)*state_size]
+                next_action = self.agents[i].actor_target(agent_next_states)
+                next_actions_list.append(next_action)
+
+            next_actions_target = torch.cat(next_actions_list, dim=1)
+
+        # Accumulate critic losses for all agents
+        critic_loss_total = 0.0
+        for i in range(self.num_agents):
+            reward_i = rewards[:, i:i+1]
+            done_i = dones[:, i:i+1]
+
+            with torch.no_grad():
+                Q_target_next = self.agents[i].critic_target(next_states, next_actions_target)
+                # Compute Q targets for current states (y_i)
+                Q_target = reward_i + (self.agents[i].gamma * Q_target_next * (1 - done_i))
+            
+            Q_expected = self.agents[i].critic_local(states, actions_buf)
+            critic_loss = F.mse_loss(Q_expected, Q_target)
+            critic_loss_total += critic_loss
+
+        # Backpropagate once for all agents
+        for i in range(self.num_agents):
+            self.agents[i].critic_optimizer.zero_grad()
+        critic_loss_total.backward()
+        for i in range(self.num_agents):
+            torch.nn.utils.clip_grad_norm_(self.agents[i].critic_local.parameters(), 1.0)
+            self.agents[i].critic_optimizer.step()
+
+        # --- Update the actor using the sampled policy gradient ---
+        for i in range(self.num_agents):
+            actions_pred_list = []
+            for j in range(self.num_agents):
+                states_j = states[:, j*state_size:(j+1)*state_size]
+                action_j = self.agents[j].actor_local(states_j)
+                if j != i:
+                    # We detach in order to avoid computing gradients through other actions
+                    action_j = action_j.detach()
+                actions_pred_list.append(action_j)
+                
+            actions_pred = torch.cat(actions_pred_list, dim=1)
+
+            action_i = actions_pred[:, i*action_size:(i+1)*action_size]
+            actor_q = -self.agents[i].critic_local(states, actions_pred).mean()
+            act_l2_penalty = (action_i**2).mean()
+            actor_loss = actor_q + 1e-3*act_l2_penalty
+            self.agents[i].actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.agents[i].actor_optimizer.step() 
+
+            self.soft_update(self.agents[i].critic_local, self.agents[i].critic_target, self.tau)
+            self.soft_update(self.agents[i].actor_local, self.agents[i].actor_target, self.tau)
+
+    def soft_update(self, local_model, target_model, tau=1e-3):
+        for local_param, target_param in zip(local_model.parameters(), target_model.parameters()):
+            target_param.data.copy_(tau * local_param.data + (1.0 - tau) * target_param.data)
+
+    def set_sigma_for_all_agents(self):
+        self.current_sigma = np.max([self.current_sigma * 0.9995, 0.05])
+        for agent in self.agents:
+            agent.noise.set_sigma(self.current_sigma)
 
     def save_models(self):
         for i, agent in enumerate(self.agents):

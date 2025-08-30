@@ -32,13 +32,13 @@ class Actor(nn.Module):
         self.fc3.weight.data.uniform_(-3e-3, 3e-3)
 
 class Critic(nn.Module):
-    def __init__(self, state_size, action_size, hidden_state_size, hidden_action_size, random_seed):
+    def __init__(self, full_state_size, full_action_size, hidden_state_size, hidden_action_size, random_seed):
         # This network has the states as an input in the input layer to determine state features
         # The actions come as an input starting from the first hidden layer
         super().__init__()
         self.seed = torch.manual_seed(random_seed)
-        self.fc1 = nn.Linear(state_size, hidden_state_size)
-        self.fc2 = nn.Linear(hidden_state_size + action_size, hidden_action_size)
+        self.fc1 = nn.Linear(full_state_size, hidden_state_size)
+        self.fc2 = nn.Linear(hidden_state_size + full_action_size, hidden_action_size)
         self.fc3 = nn.Linear(hidden_action_size, 1)
 
         self.reset_parameters()
@@ -48,10 +48,10 @@ class Critic(nn.Module):
         self.fc2.weight.data.uniform_(*hidden_init(self.fc2))
         self.fc3.weight.data.uniform_(-3e-3, 3e-3)
 
-    def forward(self, state, action):
-        x = self.fc1(state)
+    def forward(self, full_state, full_action):
+        x = self.fc1(full_state)
         x = F.relu(x)
-        x = self.fc2(torch.cat([x, action], dim=1)) 
+        x = self.fc2(torch.cat([x, full_action], dim=1)) 
         x = F.relu(x)
         value = self.fc3(x)
         return value

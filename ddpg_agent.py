@@ -1,6 +1,4 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import random
 import numpy as np
@@ -10,7 +8,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class DDPGAgent():
     
-    def __init__(self, params):
+    def __init__(self, params, num_agents):
         
         self.state_size = params['state_size']
         self.action_size = params['action_size']
@@ -24,6 +22,9 @@ class DDPGAgent():
 
         self.seed = params['random_seed']
 
+        self.theta = params['theta']
+        self.sigma = params['sigma']
+
         # Actor Network (w/ Target Network)
         self.actor_local = Actor(self.state_size, self.action_size, self.hidden_size_1, self.hidden_size_2, self.seed).to(device)
         self.actor_target = Actor(self.state_size, self.action_size, self.hidden_size_1, self.hidden_size_2, self.seed).to(device)
@@ -32,14 +33,14 @@ class DDPGAgent():
         self.actor_target.load_state_dict(self.actor_local.state_dict())
 
         # Critic Network (w/ Target Network)
-        self.critic_local = Critic(self.state_size, self.action_size, self.hidden_size_1, self.hidden_size_2, self.seed).to(device)
-        self.critic_target = Critic(self.state_size, self.action_size, self.hidden_size_1, self.hidden_size_2, self.seed).to(device)
+        self.critic_local = Critic(self.state_size*num_agents, self.action_size*num_agents, self.hidden_size_1, self.hidden_size_2, self.seed).to(device)
+        self.critic_target = Critic(self.state_size*num_agents, self.action_size*num_agents, self.hidden_size_1, self.hidden_size_2, self.seed).to(device)
         self.critic_optimizer = optim.Adam(self.critic_local.parameters(), lr=self.lr_critic, weight_decay=self.weight_decay)
 
         self.critic_target.load_state_dict(self.critic_local.state_dict())
 
         # Noise process
-        self.noise = OUNoise(self.action_size, self.seed)
+        self.noise = OUNoise(self.action_size, self.seed, theta=self.theta, sigma=self.sigma)
 
     def reset(self):
         self.noise.reset()
@@ -57,10 +58,6 @@ class DDPGAgent():
             action += self.noise.sample()
         return np.clip(action, -1, 1)
     
-    def learn(self, experiences):
-        pass
-
-
 class OUNoise:
     """Ornstein-Uhlenbeck process."""
 
@@ -75,6 +72,9 @@ class OUNoise:
     def reset(self):
         """Reset the internal state (= noise) to mean (mu)."""
         self.state = np.copy(self.mu)
+
+    def set_sigma(self, sigma):
+        self.sigma = sigma
 
     def sample(self):
         """Update internal state and return it as a noise sample."""
