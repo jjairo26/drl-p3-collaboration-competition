@@ -126,6 +126,6 @@ class MADDPG():
 
     def save_models(self):
         for i, agent in enumerate(self.agents):
-            torch.save(agent.actor_local.state_dict(), f'checkpoint_actor_{i}.pth')
-            torch.save(agent.critic_local.state_dict(), f'checkpoint_critic_{i}.pth')
+            torch.save(agent.actor_local.state_dict(), f'checkpoint_actor_{i}_sol.pth')
+            torch.save(agent.critic_local.state_dict(), f'checkpoint_critic_{i}_sol.pth')
 
